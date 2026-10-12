@@ -2,10 +2,13 @@ from .face_detectors import EARDetector, MARDetector, HeadPoseDetector
 from .phone_detector import PhoneDetector
 from .fatigue_score import FatigueScoreCalculator
 from .night_enhancer import NightEnhancer
+from .gaze_detector import GazeDetector
+from .calibrator import DriverCalibrator
 
 __all__ = [
     "EARDetector", "MARDetector", "HeadPoseDetector",
-    "PhoneDetector", "FatigueScoreCalculator", "NightEnhancer"
+    "PhoneDetector", "FatigueScoreCalculator", "NightEnhancer",
+    "GazeDetector", "DriverCalibrator"
 ]
 
 

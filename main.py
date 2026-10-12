@@ -21,11 +21,12 @@ import yaml
 
 from alerts    import AlertManager
 from detectors import (EARDetector, MARDetector, HeadPoseDetector,
-                       PhoneDetector, FatigueScoreCalculator, NightEnhancer)
+                       PhoneDetector, FatigueScoreCalculator, NightEnhancer,
+                       GazeDetector, DriverCalibrator)
 from ui        import HUDRenderer
 from reports   import SessionReporter
 from emergency import EmergencyAlertSystem
-from safety    import CriticalStateMonitor
+from safety    import CriticalStateMonitor, BreakAdvisor
 from detectors.face_detectors import LEFT_EYE, RIGHT_EYE
 
 import io
@@ -160,9 +161,22 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
         rest_cooldown=120.0,
     )
 
-    fps_ctr    = FPSCounter()
-    night_enh  = NightEnhancer()
-    start_time = time.time()
+    fps_ctr      = FPSCounter()
+    night_enh    = NightEnhancer()
+    gaze_d       = GazeDetector()
+    start_time   = time.time()
+
+    # Driver Calibration & Continuous Break Advisor
+    c_cal        = cfg.get("calibration", {})
+    calibrator   = DriverCalibrator(duration_sec=c_cal.get("duration_seconds", 5.0))
+    if not c_cal.get("auto_start", True):
+        calibrator.is_calibrating = False
+
+    c_brk        = cfg.get("break_advisor", {})
+    break_adv    = BreakAdvisor(
+        max_drive_minutes=c_brk.get("max_drive_minutes", 120.0),
+        warning_minutes=c_brk.get("warning_minutes", 90.0),
+    )
 
     # ── Web dashboard ─────────────────────────────────────────────────
     update_state = None
@@ -170,7 +184,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
         try:
             from web import start_server, update_state as _upd
             update_state = _upd
-            start_server(keep_alive=True)
+            start_server(keep_alive=False)
             import threading as _th
             def _open():
                 time.sleep(1.5)
@@ -189,26 +203,56 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
     )
 
     src = evaluate_path if evaluate_path else camera_index
-    cap = cv2.VideoCapture(src)
+    if isinstance(src, int) and sys.platform.startswith("win"):
+        cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(src)
+    else:
+        cap = cv2.VideoCapture(src)
+
+    if isinstance(src, int):
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
     if not cap.isOpened():
-        logger.error("Camera could not be opened.")
+        logger.error(f"Camera {src} could not be opened. Check device index or permissions.")
         sys.exit(1)
 
-    print("\n[INFO] Driver Safety System v5 running...")
+    print(f"\n[INFO] Driver Safety System v5 running on camera {src}...")
     print("[INFO] ESC = quit | R = reset\n")
 
     fatigue_score = 0.0
+    retry_count = 0
+    frame_count = 0
+    gaze_dir = "CENTER"
 
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
-                break
+                if evaluate_path:
+                    break
+                retry_count += 1
+                if retry_count > 30:
+                    logger.error("Camera disconnected or stopped sending frames.")
+                    break
+                time.sleep(0.05)
+                continue
+            retry_count = 0
+            frame_count += 1
 
             H, W         = frame.shape[:2]
             fps          = fps_ctr.tick()
             session_time = format_time(time.time() - start_time)
             alert_msg    = ""
+
+            # ── Break Advisor ─────────────────────────────────────────
+            break_msg = break_adv.update()
+            if break_msg:
+                alert_m.play_pattern("break")
+                if alert_m.trigger("break_rest", speech=break_msg, force=True):
+                    alert_msg = break_msg
+            break_status = break_adv.get_status()
 
             # ── Night enhancement ────────────────────────────────────────
             enhanced_frame, light_mode, brightness = night_enh.enhance(frame)
@@ -242,12 +286,35 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
 
                 hud.draw_eye_landmarks(frame, lm, W, H, LEFT_EYE, RIGHT_EYE)
 
-                # EAR / Drowsy
-                # Adaptive thresholds from night enhancer
-                ear_d.threshold = night_enh.ear_threshold
+                # Gaze / Iris Tracking
+                gaze_dir, h_ratio, v_ratio = gaze_d.update(lm, W, H)
+                if gaze_d.is_looking_down:
+                    hud.draw_alert(frame, "EYES OFF ROAD (LOOKING DOWN)!", 240, (0, 140, 255))
+                    if alert_m.trigger("gaze", 1000, 600,
+                                       "Please keep your eyes on the road."):
+                        alert_msg = "GAZE DOWN ALERT"
+                else:
+                    alert_m.reset_cooldown("gaze")
+
+                cv2.putText(frame, f"GAZE: {gaze_dir}", (W - 205, 105),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (0, 0, 255) if gaze_d.is_looking_down else (0, 255, 255), 1)
+
+                # Calibration & Adaptive Threshold
+                if calibrator.is_calibrating:
+                    done_cal = calibrator.update(ear_val, pitch, yaw, roll, True)
+                    if done_cal:
+                        ear_d.threshold = calibrator.calibrated_ear_threshold
+                        alert_m.play_pattern("calibrated")
+                        alert_m.trigger("calibrated", speech="Driver baseline calibrated. Have a safe drive!", force=True)
+                else:
+                    if light_mode == "NIGHT":
+                        ear_d.threshold = max(0.18, calibrator.calibrated_ear_threshold - 0.02)
+                    else:
+                        ear_d.threshold = calibrator.calibrated_ear_threshold
                 mar_d.threshold = night_enh.mar_threshold
                 ear_val = ear_d.update(lm, W, H)
-                if ear_d.is_drowsy:
+                if ear_d.is_drowsy and not calibrator.is_calibrating:
                     hud.draw_alert(frame, "DROWSY ALERT!", 90)
                     if alert_m.trigger("drowsy", 1000, 900,
                                        "Warning! You are drowsy. Please take a break."):
@@ -288,6 +355,8 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,165,255), 2)
                 ear_d.eye_frames = mar_d.yawn_frames = hp_d.head_frames = 0
                 ear_d.is_drowsy = mar_d.is_yawning = hp_d.is_distracted = False
+                gaze_d.reset()
+                gaze_dir = "NO FACE"
 
             # ── Fatigue score ─────────────────────────────────────────
             fatigue_score = fatigue_calc.calculate(
@@ -331,7 +400,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 fatigue_score=fatigue_score,
             )
 
-            # ── Web state ─────────────────────────────────────────────
+            # ── Web state & live video stream ─────────────────────────
             if update_state:
                 from detectors.fatigue_score import FatigueScoreCalculator as FSC
                 update_state(
@@ -353,6 +422,15 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                     critical_elapsed=round(elapsed,1),
                     light_mode=light_mode,
                     brightness=round(brightness,1),
+                    gaze_direction=gaze_dir,
+                    is_looking_down=gaze_d.is_looking_down,
+                    is_calibrating=calibrator.is_calibrating,
+                    calibrated=calibrator.is_calibrated,
+                    calibration_pct=round(calibrator.get_progress(), 1),
+                    calibrated_threshold=calibrator.calibrated_ear_threshold,
+                    driving_time=break_status["elapsed_str"],
+                    break_due=break_status["break_due"],
+                    break_remaining=break_status["remaining_str"],
                 )
 
             # ── HUD ───────────────────────────────────────────────────
@@ -366,12 +444,20 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
             hud.draw_fps(frame, fps)
             night_enh.draw_mode_indicator(frame)
 
+            if calibrator.is_calibrating:
+                hud.draw_calibration(frame, calibrator.get_progress(), calibrator.get_time_left(), calibrator.summary_text)
+            hud.draw_break_status(frame, break_status["elapsed_str"], break_status["break_due"])
+
             cv2.imshow("Driver Safety System v5", frame)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 break
-            elif key == ord("r"):
-                ear_d.reset(); mar_d.reset(); hp_d.reset()
+            elif key == ord("c") or key == ord("C"):
+                calibrator.start_calibration()
+                alert_m.play_pattern("warning")
+                print("[INFO] Re-starting driver calibration...")
+            elif key == ord("r") or key == ord("R"):
+                ear_d.reset(); mar_d.reset(); hp_d.reset(); gaze_d.reset(); break_adv.reset()
                 print("[INFO] Reset done.")
 
     finally:

@@ -1,5 +1,7 @@
 # Virtual environment
 psd_env/
+.venv/
+reports/incidents/
 
 # Python cache
 __pycache__/

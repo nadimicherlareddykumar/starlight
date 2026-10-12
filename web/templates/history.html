@@ -110,6 +110,7 @@
             <div style="font-size:11px;color:var(--muted);text-align:right;">DURATION</div>
             <div style="font-family:'Share Tech Mono',monospace;color:var(--text);">{{ s.duration_seconds }}s</div>
           </div>
+          <a href="/scorecard/{{ s.session_id }}" target="_blank" onclick="event.stopPropagation();" style="text-decoration:none;font-size:10px;font-family:'Orbitron',monospace;padding:4px 10px;border-radius:6px;background:rgba(0,212,255,0.08);border:1px solid var(--cyan);color:var(--cyan);font-weight:700;letter-spacing:1px;">SCORECARD ↗</a>
           <span class="risk-badge risk-{{ s.risk_level }}">{{ s.risk_level }}</span>
           <span class="chevron">▾</span>
         </div>

@@ -108,8 +108,10 @@ class SessionReporter:
         avg_mar     = self._avg("mar")
         avg_fatigue = self._avg("fatigue_score")
         max_fatigue = max((r.fatigue_score for r in self._records), default=0)
+        session_id = os.path.basename(self.summary_path).replace("_summary.csv", "")
 
         summary = {
+            "session_id":           session_id,
             "session_date":         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "duration_seconds":     round(duration_sec, 1),
             "total_frames":         total_frames,
@@ -129,6 +131,17 @@ class SessionReporter:
             "risk_level":           self._risk_level(avg_fatigue),
         }
 
+        # Calculate safety scorecard
+        scorecard_path = None
+        try:
+            from .scorecard_generator import ScorecardGenerator
+            score, grade, _, _ = ScorecardGenerator.calculate_score(summary)
+            summary["safety_score"] = score
+            summary["safety_grade"] = grade
+            scorecard_path = ScorecardGenerator.generate_html(summary, self.output_dir)
+        except Exception as e:
+            logger.warning(f"[Reporter] Scorecard generation failed: {e}")
+
         with open(self.summary_path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=summary.keys())
             w.writeheader()
@@ -136,6 +149,9 @@ class SessionReporter:
 
         logger.info(f"[Reporter] Summary saved: {self.summary_path}")
         self._print_summary(summary)
+        if scorecard_path:
+            print(f"  Scorecard HTML  : file:///{os.path.abspath(scorecard_path).replace(chr(92), '/')}")
+            print("="*55)
         return self.summary_path
 
     # ------------------------------------------------------------------

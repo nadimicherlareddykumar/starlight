@@ -177,6 +177,12 @@ header{display:flex;align-items:center;justify-content:space-between;
   </div>
   <div id="alert-banner"><span id="alert-text"></span></div>
 
+  <!-- Calibration Banner -->
+  <div id="calib-banner" style="display:none;padding:12px 20px;margin-bottom:14px;border-radius:10px;border:1px solid var(--cyan);background:rgba(0,212,255,0.08);color:var(--cyan);font-family:'Orbitron',monospace;font-size:12px;font-weight:700;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center;">
+    <span>⚡ CALIBRATING DRIVER BASELINE... <span id="calib-desc" style="font-family:'Rajdhani',sans-serif;font-size:13px;color:var(--text);margin-left:8px;">Look forward naturally</span></span>
+    <span id="calib-pct" style="font-family:'Share Tech Mono',monospace;font-size:14px;">0%</span>
+  </div>
+
   <!-- Fatigue Hero -->
   <div class="fatigue-hero">
     <div class="score-ring-wrap">
@@ -196,6 +202,7 @@ header{display:flex;align-items:center;justify-content:space-between;
         <div class="fstat"><div class="fstat-num" id="s-blinks">0</div><div class="fstat-lbl">BLINKS</div></div>
         <div class="fstat"><div class="fstat-num" id="s-yawns">0</div><div class="fstat-lbl">YAWNS</div></div>
         <div class="fstat"><div class="fstat-num" id="s-head">0</div><div class="fstat-lbl">HEAD ALERTS</div></div>
+        <div class="fstat"><div class="fstat-num" id="s-stint">00:00</div><div class="fstat-lbl">DRIVE STINT</div></div>
         <div class="fstat"><div class="fstat-num" id="s-fps">0</div><div class="fstat-lbl">FPS</div></div>
         <div class="fstat"><div class="fstat-num" id="s-time">00:00</div><div class="fstat-lbl">SESSION</div></div>
       </div>
@@ -238,13 +245,26 @@ header{display:flex;align-items:center;justify-content:space-between;
   </div>
 
   <!-- Row 2 -->
-  <div class="grid g2">
+  <div class="grid g3">
     <div class="card">
       <div class="card-title"><span class="dot"></span>HEAD POSE</div>
       <div class="pose-grid">
         <div class="pose-item"><div class="pose-axis">PITCH</div><div class="pose-val" id="pose-pitch">+0.0°</div></div>
         <div class="pose-item"><div class="pose-axis">YAW</div><div class="pose-val" id="pose-yaw">+0.0°</div></div>
         <div class="pose-item"><div class="pose-axis">ROLL</div><div class="pose-val" id="pose-roll">+0.0°</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>EYE GAZE & ATTENTION</div>
+      <div style="text-align:center;padding:10px 0;">
+        <div style="font-family:'Orbitron',monospace;font-size:22px;font-weight:900;letter-spacing:2px;color:var(--cyan);margin-bottom:4px;" id="gaze-dir">CENTER</div>
+        <div style="font-size:11px;color:var(--muted);letter-spacing:1px;" id="gaze-desc">Eyes focused on road ahead</div>
+      </div>
+      <div class="status-grid" style="margin-top:8px;">
+        <div class="status-item" id="s-gaze-down"><div class="sdot"></div>
+          <div><div class="sname">GAZE DOWN</div><div class="sval" id="sv-gaze-down">OK</div></div></div>
+        <div class="status-item" id="s-light"><div class="sdot" style="background:var(--cyan);"></div>
+          <div><div class="sname">CABIN LIGHT</div><div class="sval" id="sv-light">DAY</div></div></div>
       </div>
     </div>
     <div class="card">
@@ -257,6 +277,7 @@ header{display:flex;align-items:center;justify-content:space-between;
     </div>
   </div>
 
+
   <!-- Latest Session Summary -->
   <div id="latest-summary-section" style="display:none;">
     <div class="card-title" style="margin-bottom:10px;font-size:10px;letter-spacing:2px;color:var(--muted);">
@@ -264,6 +285,7 @@ header{display:flex;align-items:center;justify-content:space-between;
       LATEST SESSION SUMMARY
     </div>
     <div class="summary-grid" id="summary-grid"></div>
+    <div id="scorecard-btn-wrap"></div>
   </div>
 
   <!-- Latest Session Graph -->
@@ -390,6 +412,40 @@ es.onmessage = e => {
       col(el, Math.abs(v)>(k==='yaw'?30:20)?'#f85149':'#e6edf3'); }
   });
 
+  // Gaze & Light
+  const gaze = d.gaze_direction || 'CENTER';
+  const gazeEl = document.getElementById('gaze-dir');
+  if(gazeEl) {
+    gazeEl.textContent = gaze;
+    gazeEl.style.color = (gaze === 'LOOKING DOWN') ? '#f85149' : ((gaze === 'CENTER') ? 'var(--cyan)' : '#d29922');
+    const gazeDesc = document.getElementById('gaze-desc');
+    if(gazeDesc) {
+      gazeDesc.textContent = (gaze === 'LOOKING DOWN') ? 'WARNING: Driver looking down at lap/phone' : ((gaze === 'CENTER') ? 'Eyes focused on road ahead' : 'Looking at side mirrors/windows');
+    }
+  }
+  setStatus('s-gaze-down', 'sv-gaze-down', d.is_looking_down, 'ALERT');
+  const svLight = document.getElementById('sv-light');
+  if(svLight && d.light_mode) svLight.textContent = d.light_mode + ' (' + Math.round(d.brightness||0) + ')';
+
+  // Calibration banner
+  const cb = document.getElementById('calib-banner');
+  if(cb){
+    if(d.is_calibrating){
+      cb.style.display = 'flex';
+      const pctEl = document.getElementById('calib-pct');
+      if(pctEl) pctEl.textContent = Math.round(d.calibration_pct||0) + '%';
+    } else {
+      cb.style.display = 'none';
+    }
+  }
+
+  // Drive Stint & Rest due
+  const stintEl = document.getElementById('s-stint');
+  if(stintEl){
+    stintEl.textContent = d.driving_time || '00:00';
+    stintEl.style.color = d.break_due ? '#f85149' : (d.is_calibrating ? 'var(--cyan)' : 'var(--cyan)');
+  }
+
   // Counts
   document.getElementById('c-blinks').textContent = d.blink_count||0;
   document.getElementById('c-yawns').textContent  = d.yawn_count||0;
@@ -422,12 +478,29 @@ async function loadLatestSession(){
       {num: s.yawn_count,                lbl:'YAWNS',          col:'#bc8cff'},
       {num: s.risk_level,                lbl:'RISK LEVEL',     col: riskColors[s.risk_level]||'#8b949e'},
     ];
+
+    if(s.safety_score !== undefined){
+      const sc = Number(s.safety_score);
+      const scColor = sc>=85?'#3fb950':(sc>=70?'#d29922':'#f85149');
+      cards.push({num: `${sc.toFixed(0)} (${s.safety_grade||'A'})`, lbl:'SAFETY SCORE', col: scColor});
+    }
+
     grid.innerHTML = cards.map(c=>
       `<div class="scard">
         <div class="scard-num" style="color:${c.col}">${c.num}</div>
         <div class="scard-lbl">${c.lbl}</div>
       </div>`
     ).join('');
+
+    const scoreWrap = document.getElementById('scorecard-btn-wrap');
+    if(scoreWrap){
+      scoreWrap.innerHTML = `
+        <div style="margin-top:14px;display:flex;justify-content:flex-end;">
+          <a href="/scorecard/${s.session_id}" target="_blank" class="gtab" style="color:var(--cyan);border-color:var(--cyan);padding:8px 18px;text-decoration:none;font-weight:700;display:inline-flex;align-items:center;gap:6px;">
+            <span>VIEW OFFICIAL DRIVER SAFETY SCORECARD ↗</span>
+          </a>
+        </div>`;
+    }
 
     document.getElementById('latest-summary-section').style.display='block';
 
@@ -460,8 +533,9 @@ function loadGraph(metric, btn){
   img.src = `/api/graph/${latestSessionId}/${metric}?t=${Date.now()}`;
 }
 
-// Load latest session on page load (session may have already ended)
-window.addEventListener('load', ()=>{ loadLatestSession(); });
+window.addEventListener('load', ()=>{ 
+  loadLatestSession();
+});
 </script>
 </body>
 </html>

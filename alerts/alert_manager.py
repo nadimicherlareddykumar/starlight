@@ -69,20 +69,29 @@ def _ensure_tts_thread():
         logger.info("[TTS] Worker thread started.")
 
 
-def _beep_windows(freq: int, dur: int):
+def _beep_windows(tones: list):
+    """tones: list of (freq, dur_ms) or single (freq, dur)"""
     try:
         import winsound
-        winsound.Beep(freq, dur)
+        for freq, dur in tones:
+            winsound.Beep(max(37, min(32767, int(freq))), max(10, int(dur)))
     except Exception as e:
         logger.warning(f"[Beep] {e}")
 
 
-def _beep_fallback(freq: int, dur: int):
+def _beep_fallback(tones: list):
     print("\a", end="", flush=True)
 
 
 # ── AlertManager ──────────────────────────────────────────────────────────────
 class AlertManager:
+
+    PATTERNS = {
+        "urgent": [(1800, 140), (2400, 160), (1800, 140), (2400, 180)],
+        "warning": [(1200, 120), (1600, 140)],
+        "break": [(900, 150), (1200, 150), (1500, 250)],
+        "calibrated": [(600, 100), (900, 120), (1400, 180)],
+    }
 
     def __init__(self, cooldown: float = 6.0, tts_rate: int = 150):
         self.cooldown    = cooldown
@@ -90,6 +99,11 @@ class AlertManager:
         self._last_alert: dict = {}
         self._is_windows = platform.system() == "Windows"
         _ensure_tts_thread()
+
+    def play_pattern(self, pattern_name: str):
+        """Plays a specific multi-tone acoustic alert asynchronously."""
+        tones = self.PATTERNS.get(pattern_name, [(1000, 300)])
+        self._play_tones(tones)
 
     def trigger(
         self,
@@ -106,7 +120,14 @@ class AlertManager:
             return False
 
         self._last_alert[alert_id] = now
-        self._play_beep(beep_freq, beep_dur)
+
+        # Use dual-tone emergency buzzer for severe threats
+        if alert_id in ("drowsy", "critical", "emergency"):
+            self.play_pattern("urgent")
+        elif alert_id in ("phone", "head", "gaze", "yawn"):
+            self.play_pattern("warning")
+        else:
+            self._play_tones([(beep_freq, beep_dur)])
 
         if speech:
             if _tts_queue.qsize() < 2:
@@ -118,12 +139,6 @@ class AlertManager:
     def reset_cooldown(self, alert_id: str):
         self._last_alert.pop(alert_id, None)
 
-    def _play_beep(self, freq: int, dur: int):
-        if self._is_windows:
-            threading.Thread(
-                target=_beep_windows, args=(freq, dur), daemon=True
-            ).start()
-        else:
-            threading.Thread(
-                target=_beep_fallback, args=(freq, dur), daemon=True
-            ).start()
+    def _play_tones(self, tones: list):
+        target = _beep_windows if self._is_windows else _beep_fallback
+        threading.Thread(target=target, args=(tones,), daemon=True).start()

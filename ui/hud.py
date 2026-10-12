@@ -54,8 +54,8 @@ class HUDRenderer:
         row("Yawns",       str(yawn_n),  206)
         row("Head Alerts", str(head_n),  230)
 
-        cv2.putText(frame, "R=reset  ESC=quit", (8, 258),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.38, (100, 100, 100), 1)
+        cv2.putText(frame, "R=reset  C=calib  ESC=quit", (8, 258),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (130, 130, 130), 1)
 
     # ------------------------------------------------------------------
     def draw_bar(self, frame, val, maxv, x, y, bw, bh, label):
@@ -76,27 +76,35 @@ class HUDRenderer:
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
 
     # ------------------------------------------------------------------
-    def draw_nose_arrow(self, frame, lm, w, h, yaw, pitch):
-        nx = int(lm[1].x * w)
-        ny = int(lm[1].y * h)
-        cv2.arrowedLine(
-            frame, (nx, ny),
-            (int(nx + yaw * 1.5), int(ny - pitch * 1.5)),
-            (0, 230, 230), 2, tipLength=0.3,
-        )
+    def draw_calibration(self, frame, pct: float, time_left: float, summary: str):
+        """Draws top overlay banner during baseline calibration."""
+        h, w = frame.shape[:2]
+        bw, bh = int(w * 0.70), 54
+        bx = int((w - bw) / 2)
+        by = 16
 
-    # ------------------------------------------------------------------
-    def draw_eye_landmarks(self, frame, lm, w, h, left_ids, right_ids):
-        for ids in (left_ids, right_ids):
-            for i in ids:
-                pt = (int(lm[i].x * w), int(lm[i].y * h))
-                cv2.circle(frame, pt, 2, GREEN, -1)
+        ov = frame.copy()
+        cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (15, 15, 20), -1)
+        cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (255, 200, 0), 2)
+        cv2.addWeighted(ov, 0.75, frame, 0.25, 0, frame)
 
-    # ------------------------------------------------------------------
-    def draw_mouth_landmarks(self, frame, lm, w, h, indices):
-        for i in indices:
-            pt = (int(lm[i].x * w), int(lm[i].y * h))
-            cv2.circle(frame, pt, 2, (255, 190, 0), -1)
+        title = f"CALIBRATING DRIVER BASELINE ({time_left:.1f}s) - LOOK FORWARD"
+        cv2.putText(frame, title, (bx + 14, by + 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (255, 230, 100), 2)
+
+        # Progress bar
+        bar_w = bw - 28
+        bar_fill = int((pct / 100.0) * bar_w)
+        cv2.rectangle(frame, (bx + 14, by + 32), (bx + 14 + bar_w, by + 44), (50, 50, 50), -1)
+        cv2.rectangle(frame, (bx + 14, by + 32), (bx + 14 + bar_fill, by + 44), (255, 180, 0), -1)
+
+    def draw_break_status(self, frame, drive_str: str, break_due: bool):
+        """Draws continuous drive stint time and rest warning."""
+        h, w = frame.shape[:2]
+        col = (40, 40, 240) if break_due else (200, 200, 200)
+        text = f"DRIVE: {drive_str}" if not break_due else f"REST DUE! DRIVE: {drive_str}"
+        cv2.putText(frame, text, (w - 220, h - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 2 if break_due else 1)
 
     # ------------------------------------------------------------------
     def draw_fps(self, frame, fps: float):

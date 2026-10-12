@@ -42,6 +42,15 @@ _state = {
     "alert_msg": "", "session_time": "00:00",
     "critical_elapsed": 0.0,
     "session_active": False,   # True = webcam chal raha hai
+    "gaze_direction": "CENTER",
+    "is_looking_down": False,
+    "is_calibrating": True,
+    "calibrated": False,
+    "calibration_pct": 0.0,
+    "calibrated_threshold": 0.25,
+    "driving_time": "00:00",
+    "break_due": False,
+    "break_remaining": "02h 00m",
 }
 _state_lock = threading.Lock()
 
@@ -75,6 +84,7 @@ def stream():
     )
 
 
+
 # ── Pages ─────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
@@ -104,6 +114,16 @@ def api_latest_summary():
     if sessions:
         return jsonify(sessions[0])
     return jsonify({})
+
+
+@app.route("/scorecard/<session_id>")
+def view_scorecard(session_id):
+    directory = os.path.abspath(os.path.join("reports", "sessions"))
+    filename = f"{session_id}_scorecard.html"
+    filepath = os.path.join(directory, filename)
+    if os.path.exists(filepath):
+        return send_from_directory(directory, filename)
+    return "<h3>Scorecard not found for session: " + session_id + "</h3>", 404
 
 
 @app.route("/api/csv/<session_id>")
