@@ -76,6 +76,29 @@ class HUDRenderer:
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 3)
 
     # ------------------------------------------------------------------
+    def draw_nose_arrow(self, frame, lm, w, h, yaw, pitch):
+        nx = int(lm[1].x * w)
+        ny = int(lm[1].y * h)
+        cv2.arrowedLine(
+            frame, (nx, ny),
+            (int(nx + yaw * 1.5), int(ny - pitch * 1.5)),
+            (0, 230, 230), 2, tipLength=0.3,
+        )
+
+    # ------------------------------------------------------------------
+    def draw_eye_landmarks(self, frame, lm, w, h, left_ids, right_ids):
+        for ids in (left_ids, right_ids):
+            for i in ids:
+                pt = (int(lm[i].x * w), int(lm[i].y * h))
+                cv2.circle(frame, pt, 2, GREEN, -1)
+
+    # ------------------------------------------------------------------
+    def draw_mouth_landmarks(self, frame, lm, w, h, indices):
+        for i in indices:
+            pt = (int(lm[i].x * w), int(lm[i].y * h))
+            cv2.circle(frame, pt, 2, (255, 190, 0), -1)
+
+    # ------------------------------------------------------------------
     def draw_calibration(self, frame, pct: float, time_left: float, summary: str):
         """Draws top overlay banner during baseline calibration."""
         h, w = frame.shape[:2]
