@@ -219,7 +219,14 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
         sys.exit(1)
 
     print(f"\n[INFO] Driver Safety System v5 running on camera {src}...")
-    print("[INFO] ESC = quit | R = reset\n")
+    print("[INFO] ESC = quit | R = reset | C = calibrate\n")
+
+    window_name = "Driver Safety System v5"
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+    try:
+        cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
+    except Exception:
+        pass
 
     fatigue_score = 0.0
     retry_count = 0
@@ -448,7 +455,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 hud.draw_calibration(frame, calibrator.get_progress(), calibrator.get_time_left(), calibrator.summary_text)
             hud.draw_break_status(frame, break_status["elapsed_str"], break_status["break_due"])
 
-            cv2.imshow("Driver Safety System v5", frame)
+            cv2.imshow(window_name, frame)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 break
