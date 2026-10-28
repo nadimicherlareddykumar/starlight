@@ -329,7 +329,7 @@ max_fatigue_score, risk_level
 - Live fatigue dashboard
 - Emergency alert system
 
-[![Watch Demo](https://img.youtube.com/vi/IWAQU8ky7jo/0.jpg)](https://youtu.be/IWAQU8ky7jo)
+
 
 
 ## Known Limitations
@@ -355,7 +355,7 @@ You are free to use, modify and share this project with credit.
 
 ## Author
 
-Developed by Sneha kansal using OpenCV, MediaPipe, YOLOv8, Flask, and Python.
+Developed by Reddy using OpenCV, MediaPipe, YOLOv8, Flask, and Python.
 
 
 
