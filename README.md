@@ -678,12 +678,3 @@ max_fatigue_score, risk_level
 
 ---
 
-## License
-
-MIT License — free to use, modify, and distribute.
-
----
-
-## Author
-
-Built with OpenCV, MediaPipe, YOLOv8, Flask, and Python. -->
