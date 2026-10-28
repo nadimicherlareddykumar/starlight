@@ -208,7 +208,7 @@ ear:
   drowsy_frames: 20      # Frames eyes must be closed before drowsy alert
 
 mar:
-  threshold: 0.65        # Higher = less sensitive to yawning
+  threshold: 0.35        # MediaPipe MAR; higher = less sensitive to yawning
   yawn_min_frames: 18    # Frames mouth must be open
 
 head_pose:

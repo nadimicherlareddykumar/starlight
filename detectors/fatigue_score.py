@@ -25,7 +25,7 @@ class FatigueScoreCalculator:
     def __init__(
         self,
         ear_threshold:  float = 0.25,
-        mar_threshold:  float = 0.65,
+        mar_threshold:  float = 0.35,
     ):
         self.ear_th = ear_threshold
         self.mar_th = mar_threshold

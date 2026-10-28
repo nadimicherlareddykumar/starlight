@@ -65,9 +65,11 @@ class DriverCalibrator:
             return False
 
         if not face_detected:
+            self.summary_text = "Waiting for a clear face in the camera"
             return False
 
-        # Only collect open eye samples (ignore blinks > 0.16)
+        self.summary_text = "Hold a natural forward-facing pose"
+        # Only collect open-eye samples (ignore blinks <= 0.16)
         if ear > 0.16:
             self._ear_samples.append(ear)
             self._pitch_samples.append(pitch)
@@ -86,7 +88,10 @@ class DriverCalibrator:
         if not self.is_calibrating:
             return 100.0 if self.is_calibrated else 0.0
         elapsed = time.time() - self.start_time
-        return min(100.0, max(0.0, (elapsed / max(0.1, self.duration_sec)) * 100.0))
+        time_progress = elapsed / max(0.1, self.duration_sec)
+        sample_progress = len(self._ear_samples) / max(1, self.min_samples)
+        # Do not display a finished bar while still waiting for face samples.
+        return min(99.0, max(0.0, min(time_progress, sample_progress) * 100.0))
 
     def get_time_left(self) -> float:
         """Remaining calibration seconds."""

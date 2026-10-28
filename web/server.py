@@ -39,12 +39,13 @@ _state = {
     "is_distracted": False, "phone_detected": False,
     "blink_count": 0, "yawn_count": 0, "head_alerts": 0,
     "fps": 0.0, "face_detected": False,
+    "camera_connected": False,
     "alert_msg": "", "session_time": "00:00",
     "critical_elapsed": 0.0,
     "session_active": False,   # True = webcam chal raha hai
     "gaze_direction": "CENTER",
     "is_looking_down": False,
-    "is_calibrating": True,
+    "is_calibrating": False,
     "calibrated": False,
     "calibration_pct": 0.0,
     "calibrated_threshold": 0.25,
@@ -61,9 +62,54 @@ def update_state(**kwargs):
         _state["session_active"] = True
 
 
+def end_session():
+    """Mark the live session inactive when the camera loop exits."""
+    with _state_lock:
+        _state["session_active"] = False
+        _state["is_calibrating"] = False
+        _state["camera_connected"] = False
+
+
 def get_state() -> dict:
     with _state_lock:
         return dict(_state)
+
+
+
+# ── Live video frame streaming ────────────────────────────────────────────────
+_latest_frame_jpeg = None
+_frame_lock = threading.Lock()
+_frame_skip_cnt = 0
+
+
+def update_frame(frame):
+    global _latest_frame_jpeg, _frame_skip_cnt
+    _frame_skip_cnt += 1
+    if _frame_skip_cnt % 2 != 0:
+        return
+    try:
+        import cv2
+        small = cv2.resize(frame, (640, 480))
+        ret, buf = cv2.imencode('.jpg', small, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        if ret:
+            with _frame_lock:
+                _latest_frame_jpeg = buf.tobytes()
+    except Exception:
+        pass
+
+
+@app.route("/video_feed")
+def video_feed():
+    def gen():
+        import time
+        while True:
+            with _frame_lock:
+                frame_data = _latest_frame_jpeg
+            if frame_data is not None:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_data + b'\r\n')
+            time.sleep(0.04)
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 # ── SSE stream ────────────────────────────────────────────────────────────────

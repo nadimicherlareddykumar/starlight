@@ -119,6 +119,9 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
     c_yolo = cfg.get("yolo", {})
     c_al   = cfg.get("alerts", {})
     c_em   = cfg.get("emergency", {})
+    c_presence = cfg.get("driver_presence", {})
+    missing_face_seconds = float(c_presence.get("missing_face_seconds", 2.0))
+    camera_loss_seconds = float(c_presence.get("camera_loss_seconds", 2.0))
 
     ear_d = EARDetector(
         threshold=c_ear.get("threshold", 0.25),
@@ -142,10 +145,13 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
         phone_conf=c_yolo.get("phone_conf", 0.70),
         phone_max_area=c_yolo.get("phone_max_area", 0.25),
         phone_min_aspect=c_yolo.get("phone_min_aspect", 0.4),
+        confirmation_frames=c_yolo.get("confirmation_frames", 2),
     )
+    base_phone_conf = phone_d.phone_conf
+    base_mar_threshold = mar_d.threshold
     fatigue_calc = FatigueScoreCalculator(
         ear_threshold=c_ear.get("threshold", 0.25),
-        mar_threshold=c_mar.get("threshold", 0.65),
+        mar_threshold=c_mar.get("threshold", 0.35),
     )
     alert_m   = AlertManager(
         cooldown=c_al.get("cooldown_seconds", 6.0),
@@ -169,6 +175,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
     # Driver Calibration & Continuous Break Advisor
     c_cal        = cfg.get("calibration", {})
     calibrator   = DriverCalibrator(duration_sec=c_cal.get("duration_seconds", 5.0))
+    calibrator.calibrated_ear_threshold = ear_d.threshold
     if not c_cal.get("auto_start", True):
         calibrator.is_calibrating = False
 
@@ -180,10 +187,14 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
 
     # ── Web dashboard ─────────────────────────────────────────────────
     update_state = None
+    update_frame = None
     if not no_web:
         try:
-            from web import start_server, update_state as _upd
+            from web import (start_server, update_state as _upd,
+                             update_frame as _upd_frame, end_session as _end_session)
             update_state = _upd
+            update_frame = _upd_frame
+            end_web_session = _end_session
             start_server(keep_alive=False)
             import threading as _th
             def _open():
@@ -192,6 +203,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
             _th.Thread(target=_open, daemon=True).start()
         except ImportError as e:
             logger.warning(f"[Web] Flask missing: {e}")
+    end_web_session = locals().get("end_web_session")
 
     # ── MediaPipe ─────────────────────────────────────────────────────
     c_mp = cfg.get("mediapipe", {})
@@ -232,6 +244,8 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
     retry_count = 0
     frame_count = 0
     gaze_dir = "CENTER"
+    face_missing_since = None
+    camera_lost_since = None
 
     try:
         while True:
@@ -240,12 +254,28 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 if evaluate_path:
                     break
                 retry_count += 1
-                if retry_count > 30:
-                    logger.error("Camera disconnected or stopped sending frames.")
+                if camera_lost_since is None:
+                    camera_lost_since = time.time()
+                lost_for = time.time() - camera_lost_since
+                if lost_for >= camera_loss_seconds:
+                    message = "CAMERA FEED LOST - CHECK CAMERA"
+                    if alert_m.trigger(
+                        "camera_lost", 1500, 900,
+                        "Camera feed lost. Please check the driver camera."
+                    ):
+                        logger.error(message)
+                    if update_state:
+                        update_state(
+                            face_detected=False,
+                            camera_connected=False,
+                            alert_msg=message,
+                        )
+                if (cv2.waitKey(1) & 0xFF) == 27:
                     break
-                time.sleep(0.05)
+                time.sleep(0.10)
                 continue
             retry_count = 0
+            camera_lost_since = None
             frame_count += 1
 
             H, W         = frame.shape[:2]
@@ -267,12 +297,15 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
             yolo_frame = night_enh.enhance_for_yolo(frame)
 
             # ── Phone ─────────────────────────────────────────────────
-            phone_detected = phone_d.update(yolo_frame)
-            # Night mein YOLO conf thoda lower karo
+            # Lower the confidence only before inference and preserve the
+            # configured daytime threshold.
             if light_mode == "NIGHT":
-                phone_d.phone_conf = 0.55
+                phone_d.phone_conf = max(0.55, base_phone_conf - 0.10)
+            elif light_mode == "DUSK":
+                phone_d.phone_conf = max(0.60, base_phone_conf - 0.05)
             else:
-                phone_d.phone_conf = 0.70
+                phone_d.phone_conf = base_phone_conf
+            phone_detected = phone_d.update(frame, inference_frame=yolo_frame)
 
             if phone_detected:
                 hud.draw_alert(frame, "PHONE DETECTED!", H-130, (0,0,210))
@@ -289,13 +322,15 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
             ear_val = mar_val = pitch = yaw = roll = 0.0
 
             if res.multi_face_landmarks:
+                face_missing_since = None
+                alert_m.reset_cooldown("driver_missing")
                 lm = res.multi_face_landmarks[0].landmark
 
                 hud.draw_eye_landmarks(frame, lm, W, H, LEFT_EYE, RIGHT_EYE)
 
                 # Gaze / Iris Tracking
                 gaze_dir, h_ratio, v_ratio = gaze_d.update(lm, W, H)
-                if gaze_d.is_looking_down:
+                if gaze_d.is_looking_down and not calibrator.is_calibrating:
                     hud.draw_alert(frame, "EYES OFF ROAD (LOOKING DOWN)!", 240, (0, 140, 255))
                     if alert_m.trigger("gaze", 1000, 600,
                                        "Please keep your eyes on the road."):
@@ -307,20 +342,36 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                             (0, 0, 255) if gaze_d.is_looking_down else (0, 255, 255), 1)
 
-                # Calibration & Adaptive Threshold
+                # Calculate metrics before calibration.  Previously the
+                # calibrator was given zero EAR/head values, so it never
+                # gathered samples and its banner remained on screen.
+                if light_mode == "NIGHT":
+                    ear_d.threshold = max(0.18, calibrator.calibrated_ear_threshold - 0.02)
+                    mar_d.threshold = max(0.20, base_mar_threshold - 0.05)
+                elif light_mode == "DUSK":
+                    ear_d.threshold = max(0.18, calibrator.calibrated_ear_threshold - 0.01)
+                    mar_d.threshold = max(0.20, base_mar_threshold - 0.03)
+                else:
+                    ear_d.threshold = calibrator.calibrated_ear_threshold
+                    mar_d.threshold = base_mar_threshold
+                ear_val = ear_d.update(lm, W, H)
+                mar_val = mar_d.update(lm, W, H)
+                pitch, yaw, roll = hp_d.update(lm, W, H)
+
                 if calibrator.is_calibrating:
-                    done_cal = calibrator.update(ear_val, pitch, yaw, roll, True)
+                    done_cal = calibrator.update(
+                        ear_val, hp_d.raw_pitch, hp_d.raw_yaw, hp_d.raw_roll, True
+                    )
                     if done_cal:
                         ear_d.threshold = calibrator.calibrated_ear_threshold
+                        hp_d.set_baseline(
+                            calibrator.resting_pitch, calibrator.resting_yaw,
+                            calibrator.resting_roll,
+                        )
+                        ear_d.reset(); mar_d.reset()
                         alert_m.play_pattern("calibrated")
                         alert_m.trigger("calibrated", speech="Driver baseline calibrated. Have a safe drive!", force=True)
-                else:
-                    if light_mode == "NIGHT":
-                        ear_d.threshold = max(0.18, calibrator.calibrated_ear_threshold - 0.02)
-                    else:
-                        ear_d.threshold = calibrator.calibrated_ear_threshold
-                mar_d.threshold = night_enh.mar_threshold
-                ear_val = ear_d.update(lm, W, H)
+
                 if ear_d.is_drowsy and not calibrator.is_calibrating:
                     hud.draw_alert(frame, "DROWSY ALERT!", 90)
                     if alert_m.trigger("drowsy", 1000, 900,
@@ -333,8 +384,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
 
                 # MAR / Yawn
                 hud.draw_mouth_landmarks(frame, lm, W, H, MOUTH_LANDMARKS)
-                mar_val = mar_d.update(lm, W, H)
-                if mar_d.is_yawning:
+                if mar_d.is_yawning and not calibrator.is_calibrating:
                     hud.draw_alert(frame, "YAWNING DETECTED!", 140, (0,140,255))
                     if alert_m.trigger("yawn", 900, 600,
                                        "You are yawning. Stay alert."):
@@ -345,8 +395,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                              mar_d.yawn_min_frames, 270, 50, 170, 14, "Yawn")
 
                 # Head pose
-                pitch, yaw, roll = hp_d.update(lm, W, H)
-                if hp_d.is_distracted:
+                if hp_d.is_distracted and not calibrator.is_calibrating:
                     hud.draw_alert(frame, "HEAD DISTRACTED!", 190, (0,100,255))
                     if alert_m.trigger("head", 1100, 700,
                                        "Please keep your eyes on the road."):
@@ -358,8 +407,22 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 hud.draw_nose_arrow(frame, lm, W, H, yaw, pitch)
 
             else:
-                cv2.putText(frame, "No face", (270,40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,165,255), 2)
+                if face_missing_since is None:
+                    face_missing_since = time.time()
+                missing_for = time.time() - face_missing_since
+                if missing_for >= missing_face_seconds:
+                    message = "DRIVER NOT DETECTED - CHECK CAMERA"
+                    hud.draw_alert(frame, message, 115, (0, 0, 255))
+                    if alert_m.trigger(
+                        "driver_missing", 1500, 900,
+                        "Driver not detected. Please check the camera."
+                    ):
+                        logger.warning(message)
+                    alert_msg = message
+                else:
+                    seconds_left = max(0.0, missing_face_seconds - missing_for)
+                    cv2.putText(frame, f"Face not detected ({seconds_left:.1f}s)", (270, 40),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
                 ear_d.eye_frames = mar_d.yawn_frames = hp_d.head_frames = 0
                 ear_d.is_drowsy = mar_d.is_yawning = hp_d.is_distracted = False
                 gaze_d.reset()
@@ -424,6 +487,7 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                     head_alerts=hp_d.alert_count,
                     fps=round(fps,1),
                     face_detected=res.multi_face_landmarks is not None,
+                    camera_connected=True,
                     alert_msg=alert_msg,
                     session_time=session_time,
                     critical_elapsed=round(elapsed,1),
@@ -435,6 +499,8 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                     calibrated=calibrator.is_calibrated,
                     calibration_pct=round(calibrator.get_progress(), 1),
                     calibrated_threshold=calibrator.calibrated_ear_threshold,
+                    ear_threshold=round(ear_d.threshold, 3),
+                    mar_threshold=round(mar_d.threshold, 3),
                     driving_time=break_status["elapsed_str"],
                     break_due=break_status["break_due"],
                     break_remaining=break_status["remaining_str"],
@@ -455,7 +521,13 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 hud.draw_calibration(frame, calibrator.get_progress(), calibrator.get_time_left(), calibrator.summary_text)
             hud.draw_break_status(frame, break_status["elapsed_str"], break_status["break_due"])
 
+            if update_frame:
+                update_frame(frame)
+
             cv2.imshow(window_name, frame)
+            # Check if user closed the window with 'X' button
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                break
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 break
@@ -468,6 +540,8 @@ def run(cfg, camera_index=0, no_tts=False, no_web=False, evaluate_path=None):
                 print("[INFO] Reset done.")
 
     finally:
+        if end_web_session:
+            end_web_session()
         cap.release()
         cv2.destroyAllWindows()
         summary = reporter.finalize(
@@ -488,9 +562,12 @@ if __name__ == "__main__":
     parser.add_argument("--evaluate", default=None)
     args = parser.parse_args()
     cfg = load_config(args.config)
-    run(cfg, camera_index=args.camera,
-        no_tts=args.no_tts, no_web=args.no_web,
-        evaluate_path=args.evaluate)
+    try:
+        run(cfg, camera_index=args.camera,
+            no_tts=args.no_tts, no_web=args.no_web,
+            evaluate_path=args.evaluate)
+    except KeyboardInterrupt:
+        print("\n[INFO] Session ended by user.")
 
 
 

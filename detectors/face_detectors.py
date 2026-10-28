@@ -56,7 +56,9 @@ class EARDetector:
     def update(self, lm, w: int, h: int) -> float:
         """Returns current EAR value."""
         def pts(ids):
-            return [(int(lm[i].x * w), int(lm[i].y * h)) for i in ids]
+            # Keep sub-pixel precision; integer rounding causes noisy EAR
+            # values on small laptop-camera feeds.
+            return [(lm[i].x * w, lm[i].y * h) for i in ids]
 
         ear = (_ear(pts(LEFT_EYE)) + _ear(pts(RIGHT_EYE))) / 2.0
         closed = ear < self.threshold
@@ -71,7 +73,7 @@ class EARDetector:
 
         self._blink_open = not closed
 
-        if self.eye_frames > self.drowsy_frames:
+        if self.eye_frames >= self.drowsy_frames:
             self.is_drowsy = True
 
         return ear
@@ -95,7 +97,9 @@ def _mar(lm, w: int, h: int) -> float:
 @dataclass
 class MARDetector:
     """Mouth Aspect Ratio — tracks yawns."""
-    threshold:       float = 0.65
+    # On this MediaPipe landmark scale, normal speech is normally below
+    # 0.20.  The prior 0.65 threshold missed ordinary yawns.
+    threshold:       float = 0.35
     yawn_min_frames: int   = 18
 
     yawn_frames: int  = field(default=0, init=False)
@@ -144,10 +148,19 @@ class HeadPoseDetector:
     pitch: float = field(default=0.0, init=False)
     yaw:   float = field(default=0.0, init=False)
     roll:  float = field(default=0.0, init=False)
+    baseline_pitch: float = field(default=0.0, init=False)
+    baseline_yaw:   float = field(default=0.0, init=False)
+    baseline_roll:  float = field(default=0.0, init=False)
+    raw_pitch: float = field(default=0.0, init=False)
+    raw_yaw:   float = field(default=0.0, init=False)
+    raw_roll:  float = field(default=0.0, init=False)
 
     def update(self, lm, w: int, h: int):
         """Returns (pitch, yaw, roll) in degrees."""
-        self.pitch, self.yaw, self.roll = self._solve(lm, w, h)
+        self.raw_pitch, self.raw_yaw, self.raw_roll = self._solve(lm, w, h)
+        self.pitch = self.raw_pitch - self.baseline_pitch
+        self.yaw = self.raw_yaw - self.baseline_yaw
+        self.roll = self.raw_roll - self.baseline_roll
 
         off = (
             self.pitch < self.pitch_low
@@ -163,7 +176,7 @@ class HeadPoseDetector:
             if self.head_frames == 0:
                 self.is_distracted = False
 
-        if self.head_frames > self.alert_frames:
+        if self.head_frames >= self.alert_frames:
             if not self.is_distracted:
                 self.alert_count += 1
             self.is_distracted = True
@@ -174,6 +187,13 @@ class HeadPoseDetector:
         self.head_frames = self.alert_count = 0
         self.is_distracted = False
         self.pitch = self.yaw = self.roll = 0.0
+
+    def set_baseline(self, pitch: float, yaw: float, roll: float):
+        """Apply the driver's calibrated neutral head pose."""
+        self.baseline_pitch = float(pitch)
+        self.baseline_yaw = float(yaw)
+        self.baseline_roll = float(roll)
+        self.reset()
 
     # ------------------------------------------------------------------
     @staticmethod

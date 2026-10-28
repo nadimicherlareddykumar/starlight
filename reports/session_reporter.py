@@ -49,6 +49,7 @@ class SessionReporter:
         self.summary_path = os.path.join(output_dir, f"{ts}_summary.csv")
 
         self._records: List[FrameRecord] = []
+        self._flushed_count = 0
         self._start_time = time.time()
 
         # Write header immediately
@@ -164,11 +165,11 @@ class SessionReporter:
             ])
 
     def _flush_frames(self):
-        if not self._records:
+        if self._flushed_count >= len(self._records):
             return
         with open(self.frames_path, "a", newline="") as f:
             writer = csv.writer(f)
-            for r in self._records[-30:]:   # sirf nayi wali
+            for r in self._records[self._flushed_count:]:
                 writer.writerow([
                     r.timestamp, r.ear, r.mar,
                     r.pitch, r.yaw, r.roll,
@@ -176,6 +177,7 @@ class SessionReporter:
                     int(r.is_distracted), int(r.phone_detected),
                     r.fatigue_score,
                 ])
+        self._flushed_count = len(self._records)
 
     def _avg(self, field: str) -> float:
         vals = [getattr(r, field) for r in self._records]

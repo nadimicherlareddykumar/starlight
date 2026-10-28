@@ -124,7 +124,7 @@ class AlertManager:
         # Use dual-tone emergency buzzer for severe threats
         if alert_id in ("drowsy", "critical", "emergency"):
             self.play_pattern("urgent")
-        elif alert_id in ("phone", "head", "gaze", "yawn"):
+        elif alert_id in ("phone", "head", "gaze", "yawn", "driver_missing", "camera_lost"):
             self.play_pattern("warning")
         else:
             self._play_tones([(beep_freq, beep_dur)])
