@@ -349,7 +349,7 @@ max_fatigue_score, risk_level
 
 ## License
 
-This project is licensed under the MIT License © 2026 Sneha.
+This project is licensed under the MIT License © 2026 reddy kumar.
 
 You are free to use, modify and share this project with credit.
 
@@ -665,16 +665,5 @@ Webcam → OpenCV Frame
 
 ---
 
-## Session Report Example
 
-`reports/sessions/2026-04-23_14-30-00_summary.csv`:
-
-```
-session_date, duration_seconds, blink_count, yawn_count,
-drowsy_percent, distracted_percent, avg_fatigue_score,
-max_fatigue_score, risk_level
-2026-04-23 14:30:00, 1800, 142, 3, 2.1, 5.4, 18.3, 82.1, MODERATE
-```
-
----
 
